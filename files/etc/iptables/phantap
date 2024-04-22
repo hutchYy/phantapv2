@@ -1,0 +1,9 @@
+*filter
+:PHANTAP - [0:0]
+-A PHANTAP -i br-phantap -j DROP
+-A INPUT -j PHANTAP
+-A FORWARD -j PHANTAP
+COMMIT
+*nat
+:PHANTAP - [0:0]
+COMMIT

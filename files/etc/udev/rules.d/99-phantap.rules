@@ -1,0 +1,4 @@
+ACTION=="add", SUBSYSTEM=="net", ENV{INTERFACE}=="br-phantap", RUN+="/bin/sh -c 'echo \"phantap: Starting (udev)...\" > /dev/kmsg'"
+ACTION=="add", SUBSYSTEM=="net", ENV{INTERFACE}=="br-phantap", RUN+="/etc/init.d/phantap fwd_all"
+ACTION=="add", SUBSYSTEM=="net", ENV{INTERFACE}=="br-phantap", RUN+="/etc/init.d/phantap start"
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="br-phantap", RUN+="/bin/sh -c 'echo \"phantap: Configuring bridge %k (udev)...\" > /dev/kmsg; echo 65528 > /sys/class/net/%k/bridge/group_fwd_mask; echo 1 > /proc/sys/net/ipv6/conf/%k/disable_ipv6; /etc/init.d/phantap fwd_all; ip link set dev %k arp off multicast off allmulticast off; echo \"phantap: Bridge %k configured (udev)\" > /dev/kmsg'"

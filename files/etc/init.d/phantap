@@ -1,30 +1,44 @@
-#!/bin/sh /etc/rc.common
+#!/bin/sh
 
-START=90
-USE_PROCD=1
+### BEGIN INIT INFO
+# Provides:          phantap
+# Required-Start:    $local_fs $network $named $time $syslog
+# Required-Stop:     $local_fs $network $named $time $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: PhanTap init script
+# Description:       This script starts and stops the PhanTap service
+### END INIT INFO
+
+# Load the VERBOSE setting and other rcS variables
+. /lib/init/vars.sh
+
+# Define LSB log_* functions.
+. /lib/lsb/init-functions
+
 EXTRA_COMMANDS="setup block_net conf_net fwd_all"
 
-boot()
+do_start()
 {
-    grep -q 'pi_preinit_no_failsafe="y"' /lib/preinit/00_preinit.conf || (
-       echo "OpenWrt failsafe is on, the device will leak it's MAC address during early boot"
-       echo "See https://github.com/nccgroup/phantap/blob/master/README.md#limitations-or-how-it-can-be-detected-"
-    )
-    uci get network.phantap &>/dev/null || setup
+    log_daemon_msg "Starting PhanTap service"
+
+    # Start the process in the background
+    nohup /usr/sbin/phantap-learn -i br-phantap -v1 -b '/etc/init.d/phantap block_net' -c '/etc/init.d/phantap conf_net' > /var/log/phantap.log 2>&1 &
+    
+    # Save the PID to a pidfile
+    echo $! > /var/run/phantap.pid
+
+    log_end_msg 0  # Assuming start is always successful
 }
 
-start_service()
+do_stop()
 {
-    procd_open_instance "phantap"
-    procd_set_param command /usr/sbin/phantap-learn -i br-phantap -v1
-    procd_append_param command -b '/etc/init.d/phantap block_net'
-    procd_append_param command -c '/etc/init.d/phantap conf_net'
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
+    log_daemon_msg "Stopping PhanTap service"
+    start-stop-daemon --stop --quiet --pidfile /var/run/phantap.pid
+    log_end_msg $?
 }
 
-block_net() {
+do_block_net() {
     # block local output on br-phantap
     nft -f- <<EOI
 table bridge phantap
@@ -39,13 +53,13 @@ table bridge phantap {
 EOI
 }
 
-fwd_all() {
+do_fwd_all() {
     # Setting group_fwd_mask to 65528, Linux bridge doesn't forward 01:80:C2:00:00:0{0,1,2}
     # except if STP is disabled on the bridge then 01:80:C2:00:00:00 is forwarded
     # https://github.com/torvalds/linux/blob/fbb3abdf2223cd0dfc07de85fe5a43ba7f435bdf/net/bridge/br_input.c#L343-L346
     # Try to forward 01:80:C2:00:00:0{1,2} to all the other interfaces using 'dup',
     # even if pause frame will likely be filtered by the NIC
-    INTFS="$(uci get network.br_phantap.ports)"
+    INTFS="$(brctl show br-phantap | awk 'NR>1 {print $NF}')"
     nft -f- <<EOF1
 table netdev phantap
 flush table netdev phantap
@@ -56,7 +70,7 @@ cat <<EOF2
     type filter hook ingress device $INTF1 priority 0; policy accept;
 EOF2
 for INTF2 in $INTFS; do
-    [ $INTF1 == $INTF2 ] && continue
+    [ $INTF1 = $INTF2 ] && continue
 cat <<EOF3
     ether daddr 01:80:C2:00:00:01-01:80:C2:00:00:02 dup to $INTF2
 EOF3
@@ -70,96 +84,55 @@ done
 EOF1
 }
 
-conf_net() {
+do_conf_net() {
     # P_VICTIM_MAC P_VICTIM_IP P_NETMASK P_GATEWAY_MAC P_GATEWAY_IP P_DNS P_NTP
     echo "conf_net: P_VICTIM_MAC=$P_VICTIM_MAC P_VICTIM_IP=$P_VICTIM_IP P_GATEWAY_MAC=$P_GATEWAY_MAC P_GATEWAY_IP=$P_GATEWAY_IP P_DNS=$P_DNS"
-    . /lib/functions.sh
 
     _config_firewall
 
-    config_load phantap
-    # Run all commands in onnetconfig list
-    config_list_foreach main onnetconfig _handle_onconfig
+    if source <(grep = ./files/etc/phantap.conf); then
+        # Run all commands in onnetconfig list
+        for cmd in "${onnet_cmds[@]}"; do
+            _handle_onconfig $cmd
+        done
+    fi
 
     if [ "$P_DNS" != "0.0.0.0" ]; then
         _config_dns
-        # Run all commands in ondnsconfig list
-        config_list_foreach main ondnsconfig _handle_onconfig
+        # Run all commands in onnetconfig list
+        for cmd in "${ondns_cmds[@]}"; do
+            _handle_onconfig $cmd
+        done
     fi
 }
 
-setup() {
-
-uci set system.ntp.enabled=0
-uci set system.ntp.server=''
-
-nip=network.phantap
-ndp=network.br_phantap
-uci batch <<EOF
-set $nip=interface
-set $nip.device='br-phantap'
-set $nip.proto='static'
-set $nip.ipaddr='169.254.66.100'
-set $nip.netmask='255.255.255.254'
-set $nip.gateway='169.254.66.101'
-set $nip.dns=''
-set $nip.ipv6='0'
-set $ndp=device
-set $ndp.type='bridge'
-set $ndp.name='br-phantap'
-set $ndp.ipv6='0'
-EOF
-echo "To finish phantap configuration, start by setting up wifi,"
-echo "then get the interface names from the device"
-echo "uci show network | grep -E 'device=|ports='"
-echo "If the interfaces are part of an interface already, remove them (assuming we are using a GL-AR150)"
-echo "uci delete network.@device[0].ports"
-echo "uci delete network.wan.device"
-echo "uci delete network.wan6.device"
-echo "Add the interfaces to the phantap bridge and restart the network service (assuming we are using a GL-AR150)"
-echo "uci add_list network.br_phantap.ports='eth0'"
-echo "uci add_list network.br_phantap.ports='eth1'"
-echo "uci commit network"
-echo "/etc/init.d/network reload"
-
-fp=firewall.phantapz
-uci batch <<EOF
-set $fp=zone
-set $fp.name='phantap'
-set $fp.input='DROP'
-set $fp.output='ACCEPT'
-set $fp.forward='ACCEPT'
-set $fp.network='phantap'
-EOF
-
-dp=dhcp.phantap
-uci batch <<EOF
-set $dp=dhcp
-set $dp.interface='phantap'
-set $dp.ignore='1'
-EOF
-
-uci commit
-
-}
 
 _config_dns() {
-    resolvfile=$(uci -q get dhcp.@dnsmasq[0].resolvfile)
+    resolvfile="/etc/resolv.conf"
     [ -z "$resolvfile" ] && { echo "Resolvfile not set"; exit; }
     echo "nameserver $P_DNS" > "$resolvfile"
-    /etc/init.d/dnsmasq reload
+    systemctl reload dnsmasq
 }
 
 _config_firewall() {
-. /lib/functions/network.sh
+    P_INTF=phantap
+    P_BRIDGE=br-phantap
 
-P_INTF=phantap
-network_get_device P_BRIDGE $P_INTF
-[ -z "$P_BRIDGE" ] && { echo "Bridge not ready"; exit; }
-P_BR_MAC=$(cat /sys/class/net/$P_BRIDGE/address)
-network_get_gateway P_GW_FAKEIP $P_INTF true
+    if [ -z "$P_BRIDGE" ]; then
+        echo "Bridge not ready"
+        exit 1
+    fi
 
-nft -f- <<EOF
+    P_BR_MAC=$(cat /sys/class/net/$P_BRIDGE/address)
+
+    # Assuming that you need to get the default gateway for the specific interface
+    P_GW_FAKEIP=$(ip route show dev $P_BRIDGE default | grep default | awk '{print $3}')
+    if [ -z "$P_GW_FAKEIP" ]; then
+        echo "No gateway IP found for the interface"
+        exit 1
+    fi
+
+    nft -f- <<EOF
 table bridge phantap
 flush table bridge phantap
 table bridge phantap {
@@ -170,18 +143,17 @@ table bridge phantap {
   }
   chain output {
     type filter hook output priority 100; policy accept;
-$(if [ "$P_GATEWAY_IP" != "0.0.0.0" ]; then
-cat <<EOS
+    $(if [ "$P_GATEWAY_IP" != "0.0.0.0" ]; then
+    cat <<EOS
     meta obrname $P_BRIDGE ether daddr $P_VICTIM_MAC ether saddr set $P_GATEWAY_MAC return \
       comment "Use gateway MAC to talk to the victim"
 EOS
-else
-cat <<EOS
+    else
+    cat <<EOS
     meta obrname $P_BRIDGE ether daddr $P_VICTIM_MAC drop \
       comment "Do not talk to the victim as we don't know the gateway IP"
 EOS
-fi
-)
+    fi)
     meta obrname $P_BRIDGE ether saddr set $P_VICTIM_MAC return \
       comment "Use victim MAC"
   }
@@ -193,25 +165,51 @@ table ip phantap {
     type nat hook postrouting priority 100; policy accept;
     oifname $P_BRIDGE ct mark set ct mark or 0x1 \
       comment "Mark our traffic so we can intercept response traffic"
-$(if [ "$P_GATEWAY_IP" != "0.0.0.0" ]; then
-cat <<EOS
+    $(if [ "$P_GATEWAY_IP" != "0.0.0.0" ]; then
+    cat <<EOS
     oifname $P_BRIDGE ip daddr $P_VICTIM_IP snat ip to $P_GATEWAY_IP \
       comment "Use gateway IP to talk to the victim"
 EOS
-fi
-)
+    fi)
     oifname $P_BRIDGE snat ip to $P_VICTIM_IP \
       comment "Use victim IP"
   }
 }
 EOF
+    # Add mac for the fake gateway
+    ip neigh replace $P_GW_FAKEIP lladdr $P_GATEWAY_MAC dev $P_BRIDGE
 
-# Add mac for the fake gateway
-ip neigh replace $P_GW_FAKEIP lladdr $P_GATEWAY_MAC dev $P_BRIDGE
-
-echo "PhanTap firewall rules applied, you now have internet"
+    echo "PhanTap firewall rules applied, you now have internet"
 }
 
 _handle_onconfig() {
     /bin/sh -c "$1" || echo "'$1' failed"
 }
+
+case "$1" in
+    start)
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    restart|reload|force-reload)
+        do_stop
+        do_start
+        ;;
+    block_net)
+        do_block_net
+        ;;
+    conf_net)
+        do_conf_net
+        ;;
+    fwd_all)
+        do_fwd_all
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|block_net|conf_net|fwd_all}"
+        exit 1
+        ;;
+esac
+
+exit 0
