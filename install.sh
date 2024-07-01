@@ -117,7 +117,10 @@ sudo cp ./$EXECUTABLE_NAME /usr/sbin/$EXECUTABLE_NAME
 echo "Performing the setup of phantap"
 #sudo service phantap setup
 
+# Setting up the uninstaller script
 echo "Adding uninstall script to /usr/sbin/phantap-uninstall"
+# Going back to the root folder
+cd ..
 chmod +x phantap-uninstall.sh
 sudo cp ./phantap-uninstall.sh /usr/sbin/phantap-uninstall
 
