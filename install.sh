@@ -50,6 +50,7 @@ set_phantap_udev() {
 if ! command -v sudo &> /dev/null; then
     echo "sudo is not installed. Please install sudo and try again."
     exit 1
+fi
 
 # Installing libraries used to compile phantap
 sudo apt-get install -y make cmake build-essential libpcap-dev libnl-3-dev libnl-genl-3-dev bridge-utils dnsmasq
@@ -140,3 +141,4 @@ else
     echo "Rebooting..."
     sleep 3
     sudo reboot
+fi
