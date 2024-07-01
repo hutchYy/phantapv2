@@ -46,6 +46,11 @@ set_phantap_udev() {
     fi
 }
 
+# Check if sudo is installed
+if ! command -v sudo &> /dev/null; then
+    echo "sudo is not installed. Please install sudo and try again."
+    exit 1
+
 # Installing libraries used to compile phantap
 sudo apt-get install -y make cmake build-essential libpcap-dev libnl-3-dev libnl-genl-3-dev bridge-utils dnsmasq
 
@@ -125,6 +130,13 @@ chmod +x phantap-uninstall.sh
 sudo cp ./phantap-uninstall.sh /usr/sbin/phantap-uninstall
 
 # Rebooting to apply all settings
-echo "Setup is done, rebooting now..."
-sleep 3
-sudo reboot
+echo "Setup is done!"
+echo "Do you want to reboot? (y/n)"
+read reboot
+if [ "$reboot" != "y" ]; then
+    echo "The setup requires a reboot to work properly, reboot once you have time :)"
+    exit 0
+else
+    echo "Rebooting..."
+    sleep 3
+    sudo reboot
